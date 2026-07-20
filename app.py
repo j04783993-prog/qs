@@ -1,5 +1,6 @@
 import os
 import secrets
+import sqlite3
 import time
 from collections import defaultdict
 from datetime import timedelta
@@ -12,6 +13,46 @@ app = Flask(__name__)
 # 生产环境务必设置环境变量：export SECRET_KEY="your-random-secret-key"
 app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
 app.permanent_session_lifetime = timedelta(minutes=30)
+
+# SQLite 数据库路径
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "data", "users.db")
+
+
+def init_db():
+    """初始化 SQLite 数据库，创建 users 表并插入默认用户。"""
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            email TEXT NOT NULL,
+            phone TEXT NOT NULL
+        )
+    """)
+    # 插入默认用户，使用 INSERT OR IGNORE 防止重复插入
+    default_users = [
+        ("admin", "ChangeMe!Admin2025#", "admin@example.com", "13800138000"),
+        ("alice", "ChangeMe!Alice2025#", "alice@example.com", "13900139001"),
+    ]
+    for username, password, email, phone in default_users:
+        # 注意：本演示项目为观察 SQL 注入效果，注册和搜索使用字符串拼接
+        sql = f"INSERT OR IGNORE INTO users (username, password, email, phone) VALUES ('{username}', '{password}', '{email}', '{phone}')"
+        print(f"[init_db] SQL: {sql}")
+        cursor.execute(sql)
+    conn.commit()
+    conn.close()
+
+
+def get_db_connection():
+    """获取 SQLite 数据库连接。"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
 
 # 简易内存级登录速率限制（生产环境建议使用 Redis 或数据库实现）
 _login_attempts = defaultdict(list)
@@ -91,7 +132,13 @@ def index():
     if username and username in USERS:
         # 永远不要将密码哈希暴露给前端页面
         user_info = {k: v for k, v in USERS[username].items() if k != "password"}
-    return render_template("index.html", username=username, user=user_info)
+    return render_template(
+        "index.html",
+        username=username,
+        user=user_info,
+        keyword="",
+        search_results=[]
+    )
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -138,7 +185,90 @@ def logout():
     return redirect(url_for("index"))
 
 
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    """用户注册，使用字符串拼接 SQL 以演示 SQL 注入效果。"""
+    if request.method == "POST":
+        # CSRF 校验
+        if not _validate_csrf_token():
+            flash("CSRF 令牌无效，请重新注册", "error")
+            return redirect(url_for("register"))
+
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+        email = request.form.get("email", "")
+        phone = request.form.get("phone", "")
+
+        if not username or not password:
+            flash("用户名和密码不能为空", "error")
+            return redirect(url_for("register"))
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        # 警告：此处故意使用 f-string 字符串拼接，存在 SQL 注入风险，仅用于教学演示
+        sql = f"INSERT INTO users (username, password, email, phone) VALUES ('{username}', '{password}', '{email}', '{phone}')"
+        print(f"[register] SQL: {sql}")
+        try:
+            cursor.execute(sql)
+            conn.commit()
+            flash("注册成功，请登录", "success")
+            return redirect(url_for("login"))
+        except sqlite3.IntegrityError:
+            flash("用户名已存在", "error")
+            return redirect(url_for("register"))
+        except sqlite3.Error as e:
+            flash(f"注册失败：{e}", "error")
+            return redirect(url_for("register"))
+        finally:
+            conn.close()
+
+    return render_template("register.html")
+
+
+@app.route("/search")
+def search():
+    """用户搜索，使用字符串拼接 SQL 以演示 SQL 注入效果。"""
+    keyword = request.args.get("keyword", "")
+    results = []
+    if keyword:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        # 警告：此处故意使用 f-string 字符串拼接，存在 SQL 注入风险，仅用于教学演示
+        sql = f"SELECT * FROM users WHERE username LIKE '%{keyword}%' OR email LIKE '%{keyword}%'"
+        print(f"[search] SQL: {sql}")
+        try:
+            cursor.execute(sql)
+            rows = cursor.fetchall()
+            results = [
+                {
+                    "id": row["id"],
+                    "username": row["username"],
+                    "email": row["email"],
+                    "phone": row["phone"],
+                }
+                for row in rows
+            ]
+        except sqlite3.Error as e:
+            flash(f"搜索失败：{e}", "error")
+        finally:
+            conn.close()
+
+    username = session.get("username")
+    user_info = None
+    if username and username in USERS:
+        user_info = {k: v for k, v in USERS[username].items() if k != "password"}
+
+    return render_template(
+        "index.html",
+        username=username,
+        user=user_info,
+        keyword=keyword,
+        search_results=results
+    )
+
+
 if __name__ == "__main__":
+    init_db()
     # Debug 模式默认关闭，可通过环境变量 FLASK_DEBUG=true 开启
     debug_mode = os.environ.get("FLASK_DEBUG", "false").lower() in ("1", "true", "yes")
     app.run(host="0.0.0.0", port=5000, debug=debug_mode)

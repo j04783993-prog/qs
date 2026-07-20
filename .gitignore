@@ -11,6 +11,10 @@ venv/
 instance/
 .flaskenv
 
+# Database
+data/
+*.db
+
 # IDE
 .vscode/
 .idea/
