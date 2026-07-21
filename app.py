@@ -5,14 +5,21 @@ import time
 from collections import defaultdict
 from datetime import timedelta
 
+import uuid
+
 from flask import Flask, render_template, request, redirect, session, url_for, flash
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 # 使用环境变量读取 SECRET_KEY；若未设置则在开发环境生成随机密钥
 # 生产环境务必设置环境变量：export SECRET_KEY="your-random-secret-key"
 app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
 app.permanent_session_lifetime = timedelta(minutes=30)
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB
+
+# 上传文件白名单（仅允许图片格式）
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "bmp", "webp"}
 
 # SQLite 数据库路径
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -39,10 +46,9 @@ def init_db():
         ("alice", "ChangeMe!Alice2025#", "alice@example.com", "13900139001"),
     ]
     for username, password, email, phone in default_users:
-        # 注意：本演示项目为观察 SQL 注入效果，注册和搜索使用字符串拼接
-        sql = f"INSERT OR IGNORE INTO users (username, password, email, phone) VALUES ('{username}', '{password}', '{email}', '{phone}')"
-        print(f"[init_db] SQL: {sql}")
-        cursor.execute(sql)
+        sql = "INSERT OR IGNORE INTO users (username, password, email, phone) VALUES (?, ?, ?, ?)"
+        print(f"[init_db] SQL: {sql} params: ({username}, ***, {email}, {phone})")
+        cursor.execute(sql, (username, password, email, phone))
     conn.commit()
     conn.close()
 
@@ -187,7 +193,7 @@ def logout():
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
-    """用户注册，使用字符串拼接 SQL 以演示 SQL 注入效果。"""
+    """用户注册。"""
     if request.method == "POST":
         # CSRF 校验
         if not _validate_csrf_token():
@@ -205,11 +211,10 @@ def register():
 
         conn = get_db_connection()
         cursor = conn.cursor()
-        # 警告：此处故意使用 f-string 字符串拼接，存在 SQL 注入风险，仅用于教学演示
-        sql = f"INSERT INTO users (username, password, email, phone) VALUES ('{username}', '{password}', '{email}', '{phone}')"
-        print(f"[register] SQL: {sql}")
+        sql = "INSERT INTO users (username, password, email, phone) VALUES (?, ?, ?, ?)"
+        print(f"[register] SQL: {sql} params: ({username}, ***, {email}, {phone})")
         try:
-            cursor.execute(sql)
+            cursor.execute(sql, (username, password, email, phone))
             conn.commit()
             flash("注册成功，请登录", "success")
             return redirect(url_for("login"))
@@ -227,17 +232,17 @@ def register():
 
 @app.route("/search")
 def search():
-    """用户搜索，使用字符串拼接 SQL 以演示 SQL 注入效果。"""
+    """用户搜索。"""
     keyword = request.args.get("keyword", "")
     results = []
     if keyword:
         conn = get_db_connection()
         cursor = conn.cursor()
-        # 警告：此处故意使用 f-string 字符串拼接，存在 SQL 注入风险，仅用于教学演示
-        sql = f"SELECT * FROM users WHERE username LIKE '%{keyword}%' OR email LIKE '%{keyword}%'"
-        print(f"[search] SQL: {sql}")
+        sql = "SELECT * FROM users WHERE username LIKE ? OR email LIKE ?"
+        like_keyword = f"%{keyword}%"
+        print(f"[search] SQL: {sql} params: ({like_keyword}, {like_keyword})")
         try:
-            cursor.execute(sql)
+            cursor.execute(sql, (like_keyword, like_keyword))
             rows = cursor.fetchall()
             results = [
                 {
@@ -265,6 +270,50 @@ def search():
         keyword=keyword,
         search_results=results
     )
+
+
+def _allowed_file(filename):
+    """检查文件扩展名是否在白名单内。"""
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+@app.route("/upload", methods=["GET", "POST"])
+def upload():
+    """用户头像上传，需要登录才能访问。"""
+    if "username" not in session:
+        flash("请先登录", "error")
+        return redirect(url_for("login"))
+
+    if request.method == "POST":
+        # CSRF 校验
+        if not _validate_csrf_token():
+            flash("CSRF 令牌无效，请重新上传", "error")
+            return redirect(url_for("upload"))
+
+        file = request.files.get("avatar")
+        if not file or file.filename == "":
+            flash("请选择要上传的文件", "error")
+            return redirect(url_for("upload"))
+
+        # 安全处理：检查文件类型
+        if not _allowed_file(file.filename):
+            flash("不支持的文件类型，仅允许 png/jpg/jpeg/gif/bmp/webp", "error")
+            return redirect(url_for("upload"))
+
+        # 安全处理：使用 secure_filename 清理文件名，再用 UUID 避免重名覆盖
+        original_name = secure_filename(file.filename)
+        ext = original_name.rsplit(".", 1)[1].lower()
+        safe_name = f"{uuid.uuid4().hex}.{ext}"
+
+        upload_dir = os.path.join(BASE_DIR, "static", "uploads")
+        os.makedirs(upload_dir, exist_ok=True)
+        save_path = os.path.join(upload_dir, safe_name)
+        file.save(save_path)
+        flash("上传成功", "success")
+        file_url = url_for("static", filename=f"uploads/{safe_name}")
+        return render_template("upload.html", file_url=file_url, filename=original_name)
+
+    return render_template("upload.html")
 
 
 if __name__ == "__main__":

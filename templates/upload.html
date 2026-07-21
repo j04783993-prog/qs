@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+    <h2 class="card-title">上传头像</h2>
+    <form method="post" action="/upload" enctype="multipart/form-data" class="login-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+            <label for="avatar">选择文件（仅支持 png/jpg/jpeg/gif/bmp/webp）</label>
+            <input type="file" id="avatar" name="avatar" class="form-input" accept=".png,.jpg,.jpeg,.gif,.bmp,.webp" required>
+        </div>
+        <button type="submit" class="btn btn-primary">上传</button>
+    </form>
+
+    {% if file_url %}
+        <div class="upload-success">
+            <p>上传成功！</p>
+            <p>文件名：{{ filename }}</p>
+            <div class="upload-preview">
+                <img src="{{ file_url }}" alt="头像预览" class="avatar-preview">
+            </div>
+            <p>文件链接：<a href="{{ file_url }}" target="_blank">{{ file_url }}</a></p>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

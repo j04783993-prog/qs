@@ -244,3 +244,29 @@ body {
     text-align: center;
     padding: 20px 0;
 }
+
+/* 上传成功 */
+.upload-success {
+    margin-top: 24px;
+    padding-top: 20px;
+    border-top: 1px solid #f0f0f0;
+}
+
+.upload-success p {
+    color: #666;
+    margin-bottom: 10px;
+    font-size: 14px;
+}
+
+.upload-preview {
+    margin: 16px 0;
+    text-align: center;
+}
+
+.avatar-preview {
+    max-width: 200px;
+    max-height: 200px;
+    border-radius: 8px;
+    border: 1px solid #d9d9d9;
+    object-fit: cover;
+}
