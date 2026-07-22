@@ -19,9 +19,6 @@ data/
 static/uploads/*
 !static/uploads/.gitkeep
 
-# Test scripts (keep local only)
-brute.py
-
 # IDE
 .vscode/
 .idea/

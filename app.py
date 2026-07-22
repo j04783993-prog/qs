@@ -40,15 +40,20 @@ def init_db():
             phone TEXT NOT NULL
         )
     """)
+    # 迁移：为已有表添加 balance 字段（如不存在）
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN balance REAL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # 字段已存在
     # 插入默认用户，使用 INSERT OR IGNORE 防止重复插入
     default_users = [
-        ("admin", "ChangeMe!Admin2025#", "admin@example.com", "13800138000"),
-        ("alice", "ChangeMe!Alice2025#", "alice@example.com", "13900139001"),
+        ("admin", "ChangeMe!Admin2025#", "admin@example.com", "13800138000", 99999),
+        ("alice", "ChangeMe!Alice2025#", "alice@example.com", "13900139001", 100),
     ]
-    for username, password, email, phone in default_users:
-        sql = "INSERT OR IGNORE INTO users (username, password, email, phone) VALUES (?, ?, ?, ?)"
-        print(f"[init_db] SQL: {sql} params: ({username}, ***, {email}, {phone})")
-        cursor.execute(sql, (username, password, email, phone))
+    for username, password, email, phone, balance in default_users:
+        sql = "INSERT OR IGNORE INTO users (username, password, email, phone, balance) VALUES (?, ?, ?, ?, ?)"
+        print(f"[init_db] SQL: {sql} params: ({username}, ***, {email}, {phone}, {balance})")
+        cursor.execute(sql, (username, password, email, phone, balance))
     conn.commit()
     conn.close()
 
@@ -175,6 +180,12 @@ def login():
             _regenerate_session()
             session.permanent = True
             session["username"] = username
+            # 从数据库获取 user_id 存入 session
+            conn = get_db_connection()
+            db_user = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+            conn.close()
+            if db_user:
+                session["user_id"] = db_user["id"]
             flash("登录成功", "success")
             return redirect(url_for("index"))
         else:
@@ -314,6 +325,71 @@ def upload():
         return render_template("upload.html", file_url=file_url, filename=original_name)
 
     return render_template("upload.html")
+
+
+@app.route("/profile")
+def profile():
+    """个人中心，仅查看自己的资料。"""
+    # 检查登录状态
+    if "user_id" not in session:
+        flash("请先登录", "error")
+        return redirect(url_for("login"))
+
+    user_id = request.args.get("user_id")
+    if not user_id:
+        # 未指定时默认查看自己的资料
+        user_id = session["user_id"]
+
+    # 权限检查：只能查看自己的资料
+    if int(user_id) != session["user_id"]:
+        flash("无权查看其他用户的资料", "error")
+        return redirect(url_for("profile", user_id=session["user_id"]))
+
+    conn = get_db_connection()
+    user = conn.execute("SELECT id, username, email, phone, balance FROM users WHERE id = ?", (user_id,)).fetchone()
+    conn.close()
+
+    if not user:
+        flash("用户不存在", "error")
+        return redirect(url_for("index"))
+
+    return render_template("profile.html", user=user)
+
+
+@app.route("/recharge", methods=["POST"])
+def recharge():
+    """充值，仅允许给自己充值。"""
+    # 检查登录状态
+    if "user_id" not in session:
+        flash("请先登录", "error")
+        return redirect(url_for("login"))
+
+    user_id = request.form.get("user_id")
+    amount = request.form.get("amount")
+
+    if not user_id or not amount:
+        flash("缺少参数", "error")
+        return redirect(url_for("index"))
+
+    # 权限检查：只能给自己充值
+    if int(user_id) != session["user_id"]:
+        flash("无权操作其他用户的账户", "error")
+        return redirect(url_for("profile", user_id=session["user_id"]))
+
+    amount = float(amount)
+
+    # 业务逻辑检查：充值金额必须为正数
+    if amount <= 0:
+        flash("充值金额必须为正数", "error")
+        return redirect(url_for("profile", user_id=session["user_id"]))
+
+    conn = get_db_connection()
+    conn.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (amount, user_id))
+    conn.commit()
+    conn.close()
+
+    flash("充值成功", "success")
+    return redirect(url_for("profile", user_id=user_id))
 
 
 if __name__ == "__main__":

@@ -131,7 +131,6 @@ cursor.execute(sql, (username, password, email, phone))
 |------|------|
 | `static/uploads/*` | 忽略所有上传的文件 |
 | `!static/uploads/.gitkeep` | 保留目录结构文件 |
-| `brute.py` | 忽略暴力破解测试脚本，保留在本地不上传 |
 
 ---
 
@@ -145,7 +144,7 @@ cursor.execute(sql, (username, password, email, phone))
 | `templates/index.html` | 修改 | 首页新增「上传头像」按钮 |
 | `static/css/style.css` | 修改 | 新增上传相关样式 |
 | `static/uploads/.gitkeep` | 新增 | 保留目录结构 |
-| `.gitignore` | 修改 | 忽略上传文件和 brute.py |
+| `.gitignore` | 修改 | 忽略上传文件 |
 | `CHANGELOG_20260721.md` | 新增 | 本报告 |
 
 ---

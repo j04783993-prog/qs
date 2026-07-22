@@ -177,18 +177,7 @@ app.run(host="0.0.0.0", port=5000, debug=debug_mode)
 
 ---
 
-## 三、brute.py 的改进
-
-原 `brute.py` 是一个没有任何说明的暴力破解脚本，直接包含在项目中可能引发合规风险。已进行以下改进：
-
-1. 在文件头部添加授权声明和用途说明。
-2. 增加请求间隔（`time.sleep(1.0)`），降低对目标服务的压力。
-3. 增加异常处理（`requests.RequestException`）。
-4. 增加注释说明：当目标启用 CSRF 或速率限制时脚本将难以成功。
-
----
-
-## 四、新增文件
+## 三、新增文件
 
 - `requirements.txt`：列出项目依赖（Flask、Werkzeug、requests）。
 - `SECURITY_REPORT.md`：本报告。
