@@ -392,6 +392,76 @@ def recharge():
     return redirect(url_for("profile", user_id=user_id))
 
 
+@app.route("/page")
+def page():
+    """动态页面加载，从 pages/ 目录读取 HTML 文件。"""
+    # 检查登录状态
+    if "username" not in session:
+        flash("请先登录", "error")
+        return redirect(url_for("login"))
+
+    name = request.args.get("name", "")
+    if not name:
+        flash("缺少页面名称参数", "error")
+        return redirect(url_for("index"))
+
+    # 安全处理：清理文件名，防止路径遍历
+    # 1. 移除路径分隔符
+    name = name.replace("/", "").replace("\\", "")
+    # 2. 移除 .. 防止目录遍历
+    name = name.replace("..", "")
+
+    # 如果清理后为空，返回错误
+    if not name:
+        flash("无效的页面名称", "error")
+        return redirect(url_for("index"))
+
+    pages_dir = os.path.join(BASE_DIR, "pages")
+    file_path = os.path.join(pages_dir, name)
+
+    # 安全处理：使用 realpath 规范化路径，确保在 pages 目录内
+    real_pages_dir = os.path.realpath(pages_dir)
+    real_file_path = os.path.realpath(file_path)
+    if not real_file_path.startswith(real_pages_dir + os.sep):
+        flash("无效的页面路径", "error")
+        return redirect(url_for("index"))
+
+    # 如果文件存在则读取
+    if os.path.isfile(real_file_path):
+        with open(real_file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return render_template("index.html",
+                               username=session.get("username"),
+                               user=_get_current_user(),
+                               keyword="",
+                               search_results=[],
+                               page_content=content)
+
+    # 尝试加上 .html 后缀
+    file_path_html = real_file_path + ".html"
+    if os.path.isfile(file_path_html):
+        with open(file_path_html, "r", encoding="utf-8") as f:
+            content = f.read()
+        return render_template("index.html",
+                               username=session.get("username"),
+                               user=_get_current_user(),
+                               keyword="",
+                               search_results=[],
+                               page_content=content)
+
+    # 文件不存在
+    flash("页面不存在", "error")
+    return redirect(url_for("index"))
+
+
+def _get_current_user():
+    """获取当前登录用户信息（不含密码）。"""
+    username = session.get("username")
+    if username and username in USERS:
+        return {k: v for k, v in USERS[username].items() if k != "password"}
+    return None
+
+
 if __name__ == "__main__":
     init_db()
     # Debug 模式默认关闭，可通过环境变量 FLASK_DEBUG=true 开启
