@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import timedelta
 
 import uuid
+import bleach
 
 from flask import Flask, render_template, request, redirect, session, url_for, flash
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -71,10 +72,9 @@ _RATE_LIMIT_WINDOW = 900        # 15 分钟
 _RATE_LIMIT_MAX_ATTEMPTS = 5    # 窗口期内最大尝试次数
 
 
-def _get_client_identifier(username):
-    """基于用户名和客户端 IP 生成限流标识。"""
-    remote_addr = request.headers.get("X-Forwarded-For", request.remote_addr) or "unknown"
-    return f"{username}:{remote_addr}"
+def _get_client_identifier():
+    """基于客户端 IP 生成限流标识（不使用 X-Forwarded-For，防止伪造）。"""
+    return request.remote_addr or "unknown"
 
 
 def _is_rate_limited(identifier):
@@ -169,23 +169,21 @@ def login():
             return redirect(url_for("login"))
 
         # 3. 速率限制检查
-        identifier = _get_client_identifier(username)
+        identifier = _get_client_identifier()
         if _is_rate_limited(identifier):
             flash("登录尝试次数过多，请 15 分钟后再试", "error")
             return redirect(url_for("login"))
 
-        # 4. 验证凭据
-        user = USERS.get(username)
-        if user and check_password_hash(user["password"], password):
+        # 4. 验证凭据（从数据库查询）
+        conn = get_db_connection()
+        db_user = conn.execute("SELECT id, username, password FROM users WHERE username = ?", (username,)).fetchone()
+        conn.close()
+
+        if db_user and check_password_hash(db_user["password"], password):
             _regenerate_session()
             session.permanent = True
             session["username"] = username
-            # 从数据库获取 user_id 存入 session
-            conn = get_db_connection()
-            db_user = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
-            conn.close()
-            if db_user:
-                session["user_id"] = db_user["id"]
+            session["user_id"] = db_user["id"]
             flash("登录成功", "success")
             return redirect(url_for("index"))
         else:
@@ -223,9 +221,11 @@ def register():
         conn = get_db_connection()
         cursor = conn.cursor()
         sql = "INSERT INTO users (username, password, email, phone) VALUES (?, ?, ?, ?)"
+        # 使用哈希存储密码
+        hashed_password = generate_password_hash(password)
         print(f"[register] SQL: {sql} params: ({username}, ***, {email}, {phone})")
         try:
-            cursor.execute(sql, (username, password, email, phone))
+            cursor.execute(sql, (username, hashed_password, email, phone))
             conn.commit()
             flash("注册成功，请登录", "success")
             return redirect(url_for("login"))
@@ -392,6 +392,50 @@ def recharge():
     return redirect(url_for("profile", user_id=user_id))
 
 
+@app.route("/change-password", methods=["POST"])
+def change_password():
+    """修改密码，需要验证原密码和CSRF。"""
+    # 检查登录状态
+    if "username" not in session:
+        flash("请先登录", "error")
+        return redirect(url_for("login"))
+
+    # CSRF 校验
+    if not _validate_csrf_token():
+        flash("CSRF 令牌无效，请重新操作", "error")
+        return redirect(url_for("profile", user_id=session.get("user_id")))
+
+    username = request.form.get("username", "")
+    old_password = request.form.get("old_password", "")
+    new_password = request.form.get("new_password", "")
+
+    if not username or not old_password or not new_password:
+        flash("缺少参数", "error")
+        return redirect(url_for("profile", user_id=session.get("user_id")))
+
+    # 权限检查：只能修改自己的密码
+    if username != session.get("username"):
+        flash("无权修改其他用户的密码", "error")
+        return redirect(url_for("profile", user_id=session.get("user_id")))
+
+    # 验证原密码
+    conn = get_db_connection()
+    user = conn.execute("SELECT password FROM users WHERE username = ?", (username,)).fetchone()
+    if not user or not check_password_hash(user["password"], old_password):
+        conn.close()
+        flash("原密码错误", "error")
+        return redirect(url_for("profile", user_id=session.get("user_id")))
+
+    # 使用哈希存储新密码
+    hashed_password = generate_password_hash(new_password)
+    conn.execute("UPDATE users SET password = ? WHERE username = ?", (hashed_password, username))
+    conn.commit()
+    conn.close()
+
+    flash("密码修改成功", "success")
+    return redirect(url_for("profile", user_id=session.get("user_id")))
+
+
 @app.route("/page")
 def page():
     """动态页面加载，从 pages/ 目录读取 HTML 文件。"""
@@ -430,24 +474,32 @@ def page():
     if os.path.isfile(real_file_path):
         with open(real_file_path, "r", encoding="utf-8") as f:
             content = f.read()
+        # 安全处理：使用 bleach 清理 HTML，防止 XSS
+        allowed_tags = ['div', 'h2', 'h3', 'ul', 'li', 'p', 'span', 'a', 'br', 'strong', 'em']
+        allowed_attrs = {'a': ['href', 'title'], 'div': ['class'], 'span': ['class'], 'ul': ['class'], 'li': ['class'], 'p': ['class'], 'h2': ['class'], 'h3': ['class']}
+        safe_content = bleach.clean(content, tags=allowed_tags, attributes=allowed_attrs)
         return render_template("index.html",
                                username=session.get("username"),
                                user=_get_current_user(),
                                keyword="",
                                search_results=[],
-                               page_content=content)
+                               page_content=safe_content)
 
     # 尝试加上 .html 后缀
     file_path_html = real_file_path + ".html"
     if os.path.isfile(file_path_html):
         with open(file_path_html, "r", encoding="utf-8") as f:
             content = f.read()
+        # 安全处理：使用 bleach 清理 HTML，防止 XSS
+        allowed_tags = ['div', 'h2', 'h3', 'ul', 'li', 'p', 'span', 'a', 'br', 'strong', 'em']
+        allowed_attrs = {'a': ['href', 'title'], 'div': ['class'], 'span': ['class'], 'ul': ['class'], 'li': ['class'], 'p': ['class'], 'h2': ['class'], 'h3': ['class']}
+        safe_content = bleach.clean(content, tags=allowed_tags, attributes=allowed_attrs)
         return render_template("index.html",
                                username=session.get("username"),
                                user=_get_current_user(),
                                keyword="",
                                search_results=[],
-                               page_content=content)
+                               page_content=safe_content)
 
     # 文件不存在
     flash("页面不存在", "error")
